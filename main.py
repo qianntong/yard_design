@@ -18,13 +18,13 @@ def process_train_data(departure_file, yard_plan_file, output_dir):
 
         print(f"\nProcessing train: {train_name} | Departure: {dep_time} | Blocks: {blocks}")
 
-        # === Step 3: find the dept Train from Sheet2 of yard_plan  ===
+        # find the dept Train from Sheet2 of yard_plan
         matched_rows = yard_sheet2[yard_sheet2.astype(str).apply(lambda x: x.str.contains(train_name)).any(axis=1)]
         if matched_rows.empty:
             print(f"No match found for train {train_name} in yard_plan Sheet2.")
             continue
 
-        # Find block (assume first row is block & names）
+        # find block (assume first row is block & names）
         block_row = yard_sheet2.iloc[0]
         block_columns = [col for col in yard_sheet2.columns if any(b in str(block_row[col]) for b in blocks)]
 
@@ -32,7 +32,7 @@ def process_train_data(departure_file, yard_plan_file, output_dir):
             print(f"No matching blocks {blocks} found in yard_plan for {train_name}.")
             continue
 
-        # === Step 4: calculate CAR ARRIVING ===
+        # calculate CAR ARRIVING
         hours = list(range(0, 24))
         car_arriving_per_hour = []
         for h in hours:
