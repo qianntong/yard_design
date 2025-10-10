@@ -18,13 +18,13 @@ def process_train_data(departure_file, yard_plan_file, output_dir):
 
         print(f"\nProcessing train: {train_name} | Departure: {dep_time} | Blocks: {blocks}")
 
-        # find the dept Train from Sheet2 of yard_plan
+        # find the dept Train from pull trim from the yard_plan (sheet2)
         matched_rows = yard_sheet2[yard_sheet2.astype(str).apply(lambda x: x.str.contains(train_name)).any(axis=1)]
         if matched_rows.empty:
             print(f"No match found for train {train_name} in yard_plan Sheet2.")
             continue
 
-        # find block (assume first row is block & names）
+        # find block (assume first row is block & names)
         block_row = yard_sheet2.iloc[0]
         block_columns = [col for col in yard_sheet2.columns if any(b in str(block_row[col]) for b in blocks)]
 
