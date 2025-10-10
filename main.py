@@ -47,7 +47,7 @@ def process_train_data(departure_file, yard_plan_file, output_dir):
             'CAR_ARRIVING': car_arriving_per_hour
         })
 
-        # agg -> total_car, dwell_hours, total_car_hours, car_hours ===
+        # agg -> total_car, dwell_hours, total_car_hours, car_hours
         hourly_df['DWELL_HOURS'] = 24 - hourly_df['Hour']
         hourly_df['CARxDWELL'] = hourly_df['CAR_ARRIVING'] * hourly_df['DWELL_HOURS']
 
