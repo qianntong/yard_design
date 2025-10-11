@@ -1,82 +1,246 @@
 import pandas as pd
+import re
+from datetime import datetime, timedelta
+import openpyxl
+from openpyxl.utils.dataframe import dataframe_to_rows
 import os
 
 
-def process_train_data(departure_file, yard_plan_file, output_dir):
-    dep_df = pd.read_excel(departure_file, sheet_name='Worksheet1')
-    dep_df = dep_df[['Train', 'Scheduled Departure', 'Blocks']].dropna()
+def parse_spare_blocks(spare_str):
+    """
+    Parse block information from SPARE columns
+    Example: "2 CHBR 1 CHG" -> {'CHBR': 2, 'CHG': 1}
+    """
+    if pd.isna(spare_str) or spare_str == '':
+        return {}
 
-    yard_sheet1 = pd.read_excel(yard_plan_file, sheet_name='Sheet1')
-    yard_sheet2 = pd.read_excel(yard_plan_file, sheet_name='Sheet2')
-
-    os.makedirs(output_dir, exist_ok=True)
-
-    for _, row in dep_df.iterrows():
-        train_name = str(row['Train']).strip()
-        dep_time = row['Scheduled Departure']
-        blocks = [b.strip() for b in str(row['Blocks']).split(',')]
-
-        print(f"\nProcessing train: {train_name} | Departure: {dep_time} | Blocks: {blocks}")
-
-        # find the dept Train from pull trim from the yard_plan (sheet2)
-        matched_rows = yard_sheet2[yard_sheet2.astype(str).apply(lambda x: x.str.contains(train_name)).any(axis=1)]
-        if matched_rows.empty:
-            print(f"No match found for train {train_name} in yard_plan Sheet2.")
-            continue
-
-        # find block (assume first row is block & names)
-        block_row = yard_sheet2.iloc[0]
-        block_columns = [col for col in yard_sheet2.columns if any(b in str(block_row[col]) for b in blocks)]
-
-        if not block_columns:
-            print(f"No matching blocks {blocks} found in yard_plan for {train_name}.")
-            continue
-
-        # calculate CAR ARRIVING
-        hours = list(range(0, 24))
-        car_arriving_per_hour = []
-        for h in hours:
-            # todo: yard_plan structure check
-            hour_rows = yard_sheet1[yard_sheet1['Hour'] == h] if 'Hour' in yard_sheet1.columns else yard_sheet1
-            car_sum = hour_rows[block_columns].sum().sum()
-            car_arriving_per_hour.append(car_sum)
-
-        hourly_df = pd.DataFrame({
-            'Train': [train_name] * 24,
-            'Hour': hours,
-            'CAR_ARRIVING': car_arriving_per_hour
-        })
-
-        # agg -> total_car, dwell_hours, total_car_hours, car_hours
-        hourly_df['DWELL_HOURS'] = 24 - hourly_df['Hour']
-        hourly_df['CARxDWELL'] = hourly_df['CAR_ARRIVING'] * hourly_df['DWELL_HOURS']
-
-        total_car = hourly_df['CAR_ARRIVING'].sum()
-        total_car_hours = hourly_df['CARxDWELL'].sum()
-
-        # optimization table
-        car_hours = []
-        for i in reversed(range(24)):
-            hour = hours[i]
-            car_i = hourly_df.loc[hourly_df['Hour'] == hour, 'CAR_ARRIVING'].values[0]
-            if i == 23:
-                ch = total_car_hours - total_car + 24 * car_i
+    blocks = {}
+    parts = str(spare_str).split()
+    i = 0
+    while i < len(parts):
+        if parts[i].isdigit():
+            count = int(parts[i])
+            if i + 1 < len(parts):
+                block_name = parts[i + 1]
+                blocks[block_name] = blocks.get(block_name, 0) + count
+                i += 2
             else:
-                ch = car_hours[-1] - total_car_hours - 24 * car_i
-            car_hours.append(ch)
-        car_hours = list(reversed(car_hours))
-        hourly_df['CAR_HOURS'] = car_hours
+                i += 1
+        else:
+            i += 1
 
-        output_path = os.path.join(output_dir, f"{train_name}_summary.csv")
-        hourly_df.to_csv(output_path, index=False)
-        print(f"Saved {output_path}")
+    return blocks
 
-    print("\nAll trains processed successfully.")
+
+def parse_time_from_column(time_str):
+    """
+    Parse time column and return hour (0-23)
+    Example: "0:00-0:15" -> 0
+    """
+    if pd.isna(time_str):
+        return None
+
+    time_str = str(time_str).strip()
+    match = re.match(r'(\d+):(\d+)', time_str)
+    if match:
+        hour = int(match.group(1))
+        return hour
+    return None
+
+
+def get_blocks_from_departure(blocks_str):
+    """
+    Parse blocks from departure table
+    Example: "RLK, ESTR" -> ['RLK', 'ESTR']
+    """
+    if pd.isna(blocks_str):
+        return []
+
+    blocks = [b.strip() for b in str(blocks_str).split(',')]
+    return blocks
+
+
+def find_earliest_pull_time(yard_plan, train_name):
+    """
+    Find the earliest pull time for a specified train in yard_plan
+    """
+    pull_columns = [col for col in yard_plan.columns if col.startswith('Pull')]
+
+    earliest_time = None
+    earliest_hour = None
+
+    for _, row in yard_plan.iterrows():
+        for col in pull_columns:
+            cell_value = row[col]
+            # Fix: Convert to string and handle NaN values
+            if pd.isna(cell_value):
+                continue
+            cell_value = str(cell_value)
+
+            if train_name in cell_value:
+                hour = parse_time_from_column(row.get('Time', ''))
+                if hour is not None:
+                    # Handle midnight crossing case
+                    if earliest_hour is None:
+                        earliest_hour = hour
+                        earliest_time = row['Time']
+                    elif hour == 23 and earliest_hour < 2:
+                        # 23:xx is earlier than 0:xx-1:xx (crossing midnight)
+                        earliest_hour = hour
+                        earliest_time = row['Time']
+                    elif hour < earliest_hour and not (earliest_hour == 23 and hour < 2):
+                        earliest_hour = hour
+                        earliest_time = row['Time']
+
+    return earliest_time, earliest_hour
+
+
+def calculate_car_arriving(yard_plan, blocks, earliest_hour):
+    """
+    Calculate CAR ARRIVING for each hour
+    Exclude the row at earliest_hour (clearing operation)
+    """
+    hourly_counts = {h: 0 for h in range(24)}
+
+    # Find all relevant block columns and spare columns
+    block_columns = []
+    spare_columns = []
+
+    for col in yard_plan.columns:
+        if col.startswith('SPARE'):
+            spare_columns.append(col)
+        elif col in blocks:
+            block_columns.append(col)
+
+    # Iterate through each row, excluding the row at earliest_hour
+    for _, row in yard_plan.iterrows():
+        hour = parse_time_from_column(row.get('Time', ''))
+
+        if hour is None or hour == earliest_hour:
+            continue
+
+        count = 0
+
+        # Count direct block columns
+        for block_col in block_columns:
+            val = row.get(block_col, 0)
+            if pd.notna(val) and str(val).replace('.', '').replace('-', '').isdigit():
+                count += int(float(val))
+
+        # Count target blocks in spare columns
+        for spare_col in spare_columns:
+            spare_value = row.get(spare_col, '')
+            spare_blocks = parse_spare_blocks(spare_value)
+            for block in blocks:
+                if block in spare_blocks:
+                    count += spare_blocks[block]
+
+        hourly_counts[hour] += count
+
+    return hourly_counts
+
+
+def create_train_dataframe(train_name, hourly_counts, departure_time):
+    """
+    Create complete dataframe for a single train
+    """
+    hours = list(range(24))
+    data = {
+        'Train': [train_name] * 24,
+        'Time': [f"{h}:00" for h in hours],
+        'CAR_ARRIVING': [hourly_counts[h] for h in hours]
+    }
+
+    df = pd.DataFrame(data)
+
+    total_car = df['CAR_ARRIVING'].sum()
+
+    df['DWELL_HOURS'] = df['Time'].apply(lambda x: 24 - int(x.split(':')[0]))
+    df['CAR_ARRIVING_X_DWELL'] = df['CAR_ARRIVING'] * df['DWELL_HOURS']
+    total_car_hours = df['CAR_ARRIVING_X_DWELL'].sum()
+    df['CAR_HOURS'] = 0.0
+
+
+    for i in range(len(df) - 1, -1, -1): # Work backwards from hour 23
+        hour = int(df.loc[i, 'Time'].split(':')[0])
+        car_arriving = df.loc[i, 'CAR_ARRIVING']
+
+        if hour == 23:
+            # 23pm: total_car_hours - total_car + 24 * car_arriving(23pm)
+            df.loc[i, 'CAR_HOURS'] = total_car_hours - total_car + 24 * car_arriving
+        else:
+            # Other hours: previous hour's car_hours - total_car + current dwell * car_arriving
+            next_hour_idx = i + 1
+            prev_car_hours = df.loc[next_hour_idx, 'CAR_HOURS']
+            dwell = df.loc[i, 'DWELL_HOURS']
+            df.loc[i, 'CAR_HOURS'] = prev_car_hours - total_car + dwell * car_arriving
+
+    # Add summary information
+    df['TOTAL_CAR'] = total_car
+    df['TOTAL_CAR_HOURS'] = total_car_hours
+    df['DEPARTURE_TIME'] = departure_time
+
+    return df
+
+
+def main(departure_file, yard_plan_file, output_file):
+    print("Reading departure table...")
+    departure_df = pd.read_excel(departure_file, sheet_name='Worksheet1')
+
+    # Read yard_plan
+    print("Reading yard_plan...")
+    yard_plan = pd.read_csv(yard_plan_file)
+
+    # Create output directory if it doesn't exist
+    output_dir = os.path.dirname(output_file)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        print(f"Created directory: {output_dir}")
+
+    # Create Excel writer
+    writer = pd.ExcelWriter(output_file, engine='openpyxl')
+
+    # Iterate through each train
+    for idx, row in departure_df.iterrows():
+        train_name = str(row['Train'])
+        departure_time = row['Scheduled Departure']
+        blocks_str = row['Bocks']  # Note: might be 'Bocks' instead of 'Blocks' in original file
+
+        print(f"\nProcessing train: {train_name}")
+        print(f"  Scheduled departure: {departure_time}")
+        print(f"  Blocks: {blocks_str}")
+
+        # Parse blocks
+        blocks = get_blocks_from_departure(blocks_str)
+
+        if not blocks:
+            print(f"  Warning: {train_name} has no valid blocks information")
+            continue
+
+        # Find earliest pull time
+        earliest_time, earliest_hour = find_earliest_pull_time(yard_plan, train_name)
+
+        if earliest_hour is None:
+            print(f"  Warning: {train_name} not found in yard_plan")
+            continue
+
+        print(f"  Earliest pull time: {earliest_time} (hour: {earliest_hour})")
+
+        # Calculate CAR ARRIVING for each hour
+        hourly_counts = calculate_car_arriving(yard_plan, blocks, earliest_hour)
+
+        train_df = create_train_dataframe(train_name, hourly_counts, departure_time)
+        safe_sheet_name = re.sub(r'[\\/*?:\[\]]', '_', train_name)[:31]  # Excel sheet name limit
+        train_df.to_excel(writer, sheet_name=safe_sheet_name, index=False)
+        print(f"  Completed! Total Cars: {train_df['TOTAL_CAR'].iloc[0]}, Total Car Hours: {train_df['TOTAL_CAR_HOURS'].iloc[0]:.2f}")
+
+    writer.close()
+    print(f"\nResults saved to: {output_file}")
 
 
 if __name__ == "__main__":
-    process_train_data(
-        departure_file="data/TH-Outbound-Train-Plan-2025.xlsx",
-        yard_plan_file="data/alt_1.xlsx",
-        output_dir="results/train_summary_alt_1"
-    )
+    departure_file = "data/TH-Outbound-Train-Plan-2025.xlsx"
+    yard_plan_file = "data/alt_1.csv"
+    output_file = "results/yard_analysis_results_alt_1.xlsx"
+
+    main(departure_file, yard_plan_file, output_file)

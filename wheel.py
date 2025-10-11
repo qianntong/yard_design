@@ -3,7 +3,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 def time_to_angle(time_value):
-    """Convert time (datetime or string) into angle (radians) for 24-hour polar chart."""
     if pd.isnull(time_value):
         return np.nan
     if isinstance(time_value, str):
@@ -15,20 +14,17 @@ def time_to_angle(time_value):
 
 
 def plot_train_chart(inbound_file, outbound_file, save_path="yard_train_chart.png"):
-    # === Read inbound data ===
     inbound_df = pd.read_excel(inbound_file, sheet_name="Schedule", usecols=["Train", "Scheduled Arrival"])
     inbound_df = inbound_df.dropna(subset=["Train", "Scheduled Arrival"])
     inbound_df["Angle"] = inbound_df["Scheduled Arrival"].apply(time_to_angle)
     inbound_df["Type"] = "Inbound"
 
-    # === Read outbound data ===
     outbound_df = pd.read_csv(outbound_file, usecols=["Departure Train", "Departure Time"])
     outbound_df = outbound_df.rename(columns={"Departure Train": "Train", "Departure Time": "Time"})
     outbound_df = outbound_df.dropna(subset=["Train", "Time"])
     outbound_df["Angle"] = outbound_df["Time"].apply(time_to_angle)
     outbound_df["Type"] = "Outbound"
 
-    # === Polar figure setup ===
     fig, ax = plt.subplots(figsize=(9, 9), subplot_kw={'projection': 'polar'})
     ax.set_theta_direction(-1)
     ax.set_theta_zero_location('N')
@@ -36,13 +32,11 @@ def plot_train_chart(inbound_file, outbound_file, save_path="yard_train_chart.pn
     ax.set_xticks(2 * np.pi * np.arange(0, 24, 1) / 24)
     ax.set_xticklabels(np.arange(0, 24, 1), fontsize=10)
 
-    # === Yard circle (smaller and gray) ===
-    yard_radius = 0.15
+    yard_radius = 0.1
     yard_circle = plt.Circle((0, 0), yard_radius, color='lightgray', alpha=0.9)
     ax.add_artist(yard_circle)
     ax.text(0, 0, "Yard", color="black", ha="center", va="center", fontsize=10, fontweight='bold')
 
-    # === Plot inbound trains (red arrows pointing inward) ===
     for _, row in inbound_df.iterrows():
         angle = row["Angle"]
         if np.isnan(angle):
@@ -57,7 +51,6 @@ def plot_train_chart(inbound_file, outbound_file, save_path="yard_train_chart.pn
                 ha="center", va="center", rotation=np.degrees(-angle),
                 rotation_mode='anchor')
 
-    # === Plot outbound trains (green arrows pointing outward) ===
     for _, row in outbound_df.iterrows():
         angle = row["Angle"]
         if np.isnan(angle):
@@ -72,9 +65,7 @@ def plot_train_chart(inbound_file, outbound_file, save_path="yard_train_chart.pn
                 ha="center", va="center", rotation=np.degrees(-angle),
                 rotation_mode='anchor')
 
-    # === Style settings ===
-    ax.set_title("24-hour Yard Chart",
-                 fontsize=14, pad=25, fontweight='bold')
+    ax.set_title("24-hour Yard Chart", fontsize=14, pad=25, fontweight='bold')
     ax.grid(alpha=0.3)
 
     plt.tight_layout()
@@ -83,7 +74,6 @@ def plot_train_chart(inbound_file, outbound_file, save_path="yard_train_chart.pn
     print(f"Chart saved to {save_path}")
 
 
-# ==== Run example ====
 if __name__ == "__main__":
     plot_train_chart(
         inbound_file="data/TH-Inbound-Train-Plan-2025.xlsx",
