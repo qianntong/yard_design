@@ -135,7 +135,7 @@ def calculate_car_arriving(yard_plan, blocks, earliest_hour):
                 if block in spare_blocks:
                     count += spare_blocks[block]
 
-        hourly_counts[hour] += count
+        hourly_counts[hour] += max(0,count)
 
     return hourly_counts
 
@@ -153,10 +153,9 @@ def create_train_dataframe(train_name, hourly_counts, departure_time):
 
     df = pd.DataFrame(data)
 
-    total_car = df['CAR_ARRIVING'].sum()
-
     df['DWELL_HOURS'] = df['Time'].apply(lambda x: 24 - int(x.split(':')[0]))
     df['CAR_ARRIVING_X_DWELL'] = df['CAR_ARRIVING'] * df['DWELL_HOURS']
+    total_car = df['CAR_ARRIVING'].sum()
     total_car_hours = df['CAR_ARRIVING_X_DWELL'].sum()
     df['CAR_HOURS'] = 0.0
 
@@ -172,8 +171,7 @@ def create_train_dataframe(train_name, hourly_counts, departure_time):
             # Other hours: previous hour's car_hours - total_car + current dwell * car_arriving
             next_hour_idx = i + 1
             prev_car_hours = df.loc[next_hour_idx, 'CAR_HOURS']
-            dwell = df.loc[i, 'DWELL_HOURS']
-            df.loc[i, 'CAR_HOURS'] = prev_car_hours - total_car + dwell * car_arriving
+            df.loc[i, 'CAR_HOURS'] = prev_car_hours - total_car + 24 * car_arriving
 
     # Add summary information
     df['TOTAL_CAR'] = total_car
@@ -187,37 +185,32 @@ def main(departure_file, yard_plan_file, output_file):
     print("Reading departure table...")
     departure_df = pd.read_excel(departure_file, sheet_name='Worksheet1')
 
-    # Read yard_plan
     print("Reading yard_plan...")
     yard_plan = pd.read_csv(yard_plan_file)
 
-    # Create output directory if it doesn't exist
     output_dir = os.path.dirname(output_file)
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir)
         print(f"Created directory: {output_dir}")
 
-    # Create Excel writer
     writer = pd.ExcelWriter(output_file, engine='openpyxl')
+    summary_data = []
 
-    # Iterate through each train
     for idx, row in departure_df.iterrows():
         train_name = str(row['Train'])
         departure_time = row['Scheduled Departure']
-        blocks_str = row['Bocks']  # Note: might be 'Bocks' instead of 'Blocks' in original file
+        blocks_str = row['Bocks']
 
         print(f"\nProcessing train: {train_name}")
         print(f"  Scheduled departure: {departure_time}")
         print(f"  Blocks: {blocks_str}")
 
-        # Parse blocks
         blocks = get_blocks_from_departure(blocks_str)
 
         if not blocks:
             print(f"  Warning: {train_name} has no valid blocks information")
             continue
 
-        # Find earliest pull time
         earliest_time, earliest_hour = find_earliest_pull_time(yard_plan, train_name)
 
         if earliest_hour is None:
@@ -226,21 +219,56 @@ def main(departure_file, yard_plan_file, output_file):
 
         print(f"  Earliest pull time: {earliest_time} (hour: {earliest_hour})")
 
-        # Calculate CAR ARRIVING for each hour
         hourly_counts = calculate_car_arriving(yard_plan, blocks, earliest_hour)
-
         train_df = create_train_dataframe(train_name, hourly_counts, departure_time)
-        safe_sheet_name = re.sub(r'[\\/*?:\[\]]', '_', train_name)[:31]  # Excel sheet name limit
+
+        # Extract summary metrics
+        total_car = train_df['TOTAL_CAR'].iloc[0]
+        total_car_hours = train_df['TOTAL_CAR_HOURS'].iloc[0]
+        avg_car_hours = total_car_hours / total_car if total_car > 0 else 0
+
+        min_car_hours_idx = train_df['CAR_HOURS'].idxmin()
+        min_car_hours = train_df.loc[min_car_hours_idx, 'CAR_HOURS']
+        min_car_hours_time = train_df.loc[min_car_hours_idx, 'Time']
+
+        summary_data.append({
+            'Train': train_name,
+            'DEPT_TIME': departure_time,
+            'TOTAL_CAR': total_car,
+            'TOTAL_CAR_HOURS': total_car_hours,
+            'AVG_CAR_HOURS': round(avg_car_hours,2),
+            'MIN_CAR_HOURS': min_car_hours,
+            'MIN_CAR_HOURS_TIME': min_car_hours_time
+        })
+
+        safe_sheet_name = re.sub(r'[\\/*?:\[\]]', '_', train_name)[:31]
         train_df.to_excel(writer, sheet_name=safe_sheet_name, index=False)
-        print(f"  Completed! Total Cars: {train_df['TOTAL_CAR'].iloc[0]}, Total Car Hours: {train_df['TOTAL_CAR_HOURS'].iloc[0]:.2f}")
+
+        print(f"  Completed! Total Cars: {total_car}, Total Car Hours: {total_car_hours:.2f}, Avg: {avg_car_hours:.2f}")
 
     writer.close()
-    print(f"\nResults saved to: {output_file}")
 
+    # Create summary sheet
+    if summary_data:
+        summary_df = pd.DataFrame(summary_data)
+        wb = openpyxl.load_workbook(output_file)
+
+        if 'Summary' in wb.sheetnames:
+            del wb['Summary']
+        ws_summary = wb.create_sheet('Summary', 0)
+
+        for r_idx, row in enumerate(dataframe_to_rows(summary_df, index=False, header=True), 1):
+            for c_idx, value in enumerate(row, 1):
+                ws_summary.cell(row=r_idx, column=c_idx, value=value)
+
+        wb.save(output_file)
+        print(f"\nSummary sheet created with {len(summary_data)} trains")
+
+    print(f"\nResults saved to: {output_file}")
 
 if __name__ == "__main__":
     departure_file = "data/TH-Outbound-Train-Plan-2025.xlsx"
-    yard_plan_file = "data/alt_1.csv"
-    output_file = "results/yard_analysis_results_alt_1.xlsx"
+    yard_plan_file = "data/alt_2.csv"
+    output_file = "results/yard_chart_results_alt_2.xlsx"
 
     main(departure_file, yard_plan_file, output_file)
