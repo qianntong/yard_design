@@ -126,6 +126,7 @@ def calculate_car_arriving(yard_plan, blocks, earliest_hour):
             val = row.get(block_col, 0)
             if pd.notna(val) and str(val).replace('.', '').replace('-', '').isdigit():
                 count += int(float(val))
+                # print(f"column count: {count}")
 
         # Count target blocks in spare columns
         for spare_col in spare_columns:
@@ -135,8 +136,11 @@ def calculate_car_arriving(yard_plan, blocks, earliest_hour):
                 if block in spare_blocks:
                     count += spare_blocks[block]
 
+
         hourly_counts[hour] += max(0,count)
 
+
+    print(f"count: {count}; hourly counts: {hourly_counts}")
     return hourly_counts
 
 
@@ -151,6 +155,7 @@ def create_train_dataframe(train_name, hourly_counts, departure_time):
         'CAR_ARRIVING': [hourly_counts[h] for h in hours]
     }
 
+    print(f"data for {train_name}: {data}")
     df = pd.DataFrame(data)
 
     df['DWELL_HOURS'] = df['Time'].apply(lambda x: 24 - int(x.split(':')[0]))
@@ -220,6 +225,7 @@ def main(departure_file, yard_plan_file, output_file):
         print(f"  Earliest pull time: {earliest_time} (hour: {earliest_hour})")
 
         hourly_counts = calculate_car_arriving(yard_plan, blocks, earliest_hour)
+
         train_df = create_train_dataframe(train_name, hourly_counts, departure_time)
 
         # Extract summary metrics
@@ -268,7 +274,7 @@ def main(departure_file, yard_plan_file, output_file):
 
 if __name__ == "__main__":
     departure_file = "data/TH-Outbound-Train-Plan-2025.xlsx"
-    yard_plan_file = "data/alt_2.csv"
-    output_file = "results/yard_chart_results_alt_2.xlsx"
+    yard_plan_file = "data/alt_3.csv"
+    output_file = "results/yard_chart_results_alt_3.xlsx"
 
     main(departure_file, yard_plan_file, output_file)
