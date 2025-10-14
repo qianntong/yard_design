@@ -233,7 +233,7 @@ def main(departure_file, count_file, output_file):
 
 if __name__ == "__main__":
     departure_file = "data/TH-Outbound-Train-Plan-2025.xlsx"
-    count_file = "data/alt_3_blocks_sum.xlsx"
-    output_file = "results/yard_chart_results_alt_3.xlsx"
+    count_file = "data/alt_2_blocks_sum.xlsx"
+    output_file = "results/yard_chart_results_alt_2.xlsx"
 
     main(departure_file, count_file, output_file)
