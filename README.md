@@ -94,7 +94,7 @@ For each train, calculates:
 
 5. **CAR_HOURS**: Cumulative car-hours (calculated backwards from 23:00)
    - Hour 23: `TOTAL_CAR_HOURS - TOTAL_CAR + 24 × CAR_ARRIVING(23)`
-   - Hour 22-0: `Previous_CAR_HOURS - TOTAL_CAR + DWELL_HOURS × CAR_ARRIVING`
+   - Hour 22-0: `Previous_CAR_HOURS - TOTAL_CAR + 24 × CAR_ARRIVING`
 
 ## Output Format
 
